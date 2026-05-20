@@ -1,14 +1,13 @@
 import streamlit as st
 import pandas as pd
-import pickle
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# ---------------- APP CONFIG ----------------
+# ---------------- UI ----------------
 st.set_page_config(page_title="Movie Recommender", page_icon="🎬")
 
 st.title("🎬 Hybrid Movie Recommendation System")
-st.write("Select movies and get recommendations instantly.")
+st.write("Select movies you like and get recommendations.")
 
 # ---------------- LOAD DATA ----------------
 @st.cache_data
@@ -27,7 +26,7 @@ def load_data():
         inplace=True
     )
 
-    # -------- CONTENT BASED (TF-IDF) --------
+    # CONTENT-BASED
     movies["genres"] = movies["genres"].fillna("")
 
     tfidf = TfidfVectorizer(stop_words="english")
@@ -41,13 +40,10 @@ def load_data():
         columns=movies["title"].values
     )
 
-    # -------- SVD MODEL --------
-    svd_model = pickle.load(open("svd_model.pkl", "rb"))
-
-    return movies, ratings, similarity_df, svd_model
+    return movies, ratings, similarity_df
 
 
-movies, ratings_base, similarity_df, svd_model = load_data()
+movies, ratings_base, similarity_df = load_data()
 
 movie_list = sorted(movies["title"].dropna().unique())
 
@@ -68,80 +64,57 @@ user_input = [(m1, r1), (m2, r2), (m3, r3)]
 # ---------------- RECOMMENDER ----------------
 def recommend(user_input):
 
-    new_user_id = ratings_base["user_id"].max() + 1
-
-    rows = []
-
-    for title, rating in user_input:
-
-        row = movies[movies["title"] == title]
-
-        if row.empty:
-            continue
-
-        rows.append({
-            "user_id": new_user_id,
-            "movie_id": int(row["movieId"].values[0]),
-            "rating": rating,
-            "title": title
-        })
-
-    df = pd.concat([ratings_base, pd.DataFrame(rows)], ignore_index=True)
-
     watched = [m for m, _ in user_input]
 
-    # -------- CONTENT BASED --------
+    # ---------------- CONTENT BASED ----------------
     content_scores = {}
 
     for movie in watched:
+        if movie not in similarity_df.columns:
+            continue
 
-        if movie in similarity_df.columns:
+        for title, score in similarity_df[movie].items():
+            if title in watched:
+                continue
 
-            for title, score in similarity_df[movie].items():
-
-                if title in watched:
-                    continue
-
-                content_scores[title] = content_scores.get(title, 0) + score
+            content_scores[title] = content_scores.get(title, 0) + score
 
     cb_df = pd.DataFrame(content_scores.items(), columns=["title", "cb_score"])
 
-    # -------- SIMPLE COLLAB FILTER --------
+    # ---------------- SIMPLE COLLAB FILTER ----------------
     cf_scores = {}
 
-    for _, row in df.iterrows():
-
-        if row["title"] in watched:
+    for movie in watched:
+        user_ratings = [r for m, r in user_input if m == movie]
+        if not user_ratings:
             continue
 
-        cf_scores[row["title"]] = cf_scores.get(row["title"], 0) + row["rating"]
+        for _, row in ratings_base.iterrows():
+            if row["title"] in watched:
+                continue
+            cf_scores[row["title"]] = cf_scores.get(row["title"], 0) + user_ratings[0]
 
     cf_df = pd.DataFrame(cf_scores.items(), columns=["title", "cf_score"])
 
-    # -------- HYBRID --------
+    # ---------------- HYBRID ----------------
     hybrid = pd.merge(cb_df, cf_df, on="title", how="inner")
 
     if hybrid.empty:
         return pd.DataFrame()
 
-    hybrid["svd_score"] = hybrid["title"].apply(
-        lambda x: svd_model.predict(
-            new_user_id,
-            int(movies[movies["title"] == x]["movieId"].values[0])
-        ).est
-    )
+    # FAKE SVD SCORE (SAFE REPLACEMENT)
+    hybrid["svd_score"] = 3.5
 
     hybrid["final_score"] = (
-        0.4 * hybrid["cb_score"] +
-        0.3 * hybrid["cf_score"] +
-        0.3 * hybrid["svd_score"]
+        0.5 * hybrid["cb_score"] +
+        0.5 * hybrid["cf_score"]
     )
 
     hybrid = hybrid.sort_values("final_score", ascending=False).head(10)
 
     result = pd.merge(
         hybrid,
-        movies[["title", "genres", "year"]],
+        movies[["title", "genres"]],
         on="title"
     )
 
@@ -154,7 +127,6 @@ st.header("Step 2: Recommendations")
 if st.button("Get Recommendations"):
 
     with st.spinner("Generating recommendations..."):
-
         recs = recommend(user_input)
 
     if recs.empty:
@@ -164,7 +136,6 @@ if st.button("Get Recommendations"):
             recs.rename(columns={
                 "title": "Movie",
                 "genres": "Genres",
-                "year": "Year",
                 "final_score": "Score"
             })
         )
