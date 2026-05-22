@@ -109,31 +109,25 @@ st.subheader("🎬 Recommendations")
 
 if st.button("Get Recommendations"):
 
-    recs = None  # 🔥 IMPORTANT: always define first
-
     with st.spinner("Finding movies..."):
         recs = recommend(user_input)
 
-    # safety check (CRITICAL FIX)
     if recs is None or recs.empty:
         st.warning("No recommendations found.")
     else:
         for _, row in recs.iterrows():
 
-            st.markdown(f"""
-            <div style="
-                background:#eef3ff;
-                padding:12px;
-                border-radius:12px;
-                margin-bottom:10px;
-                color:black;
-            ">
-                <h4 style="margin:0; color:black;">
-                    🎬 {row['title'].title()}
-                </h4>
+            html = (
+                "<div style='"
+                "background:#eef3ff;"
+                "padding:12px;"
+                "border-radius:12px;"
+                "margin-bottom:10px;"
+                "color:black;"
+                "'>"
+                f"<h4 style='margin:0; color:black;'>🎬 {row['title'].title()}</h4>"
+                f"<p style='margin:5px 0 0 0; color:black;'>🎭 {row.get('genres','')}</p>"
+                "</div>"
+            )
 
-                <p style="margin:5px 0 0 0; color:black;">
-                    🎭 {row.get('genres','')}
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(html, unsafe_allow_html=True)
