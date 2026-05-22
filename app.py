@@ -15,8 +15,16 @@ st.set_page_config(
 
 st.title("🎬 Hybrid Movie Recommendation System")
 
+language = st.selectbox("🌍 Language", ["English", "Arabic", "French"])
+
+TEXT = {
+    "English": {"btn": "Get Recommendations", "msg": "Top Movies", "warn": "No results"},
+    "Arabic": {"btn": "احصل على التوصيات", "msg": "أفضل الأفلام", "warn": "لا توجد نتائج"},
+    "French": {"btn": "Recommander", "msg": "Meilleurs films", "warn": "Aucun résultat"}
+}
+
 # =========================
-# LOAD DATA (SAFE)
+# LOAD DATA
 # =========================
 @st.cache_data
 def load_data():
@@ -24,47 +32,12 @@ def load_data():
     movies = pd.read_csv("movies.csv")
     ratings = pd.read_csv("ratings.csv")
 
-    # clean column names (CRITICAL)
     movies.columns = movies.columns.str.strip()
     ratings.columns = ratings.columns.str.strip()
 
-    # =========================
-    # DETECT MOVIE ID COLUMN
-    # =========================
-    def find_col(df, options):
-        for c in df.columns:
-            if c.lower() in options:
-                return c
-        return None
+    data = ratings.merge(movies, on="movieId")
 
-    movies_id = find_col(movies, ["movieid", "movie_id", "id"])
-    ratings_id = find_col(ratings, ["movieid", "movie_id", "id"])
-
-    if movies_id is None or ratings_id is None:
-        st.error("Missing movieId column in one of the datasets.")
-        st.stop()
-
-    movies = movies.rename(columns={movies_id: "movieId"})
-    ratings = ratings.rename(columns={ratings_id: "movieId"})
-
-    # =========================
-    # MERGE SAFE
-    # =========================
-    if "title" not in movies.columns:
-        st.error("movies.csv must contain 'title'")
-        st.stop()
-
-    ratings = ratings.merge(
-        movies[["movieId", "title"]],
-        on="movieId",
-        how="left"
-    )
-
-    # =========================
-    # CONTENT BASED MODEL
-    # =========================
-    if "genres" not in movies.columns:
-        movies["genres"] = ""
+    movies["genres"] = movies["genres"].fillna("")
 
     tfidf = TfidfVectorizer(stop_words="english")
     tfidf_matrix = tfidf.fit_transform(movies["genres"])
@@ -77,110 +50,95 @@ def load_data():
         columns=movies["title"]
     )
 
-    # =========================
-    # WEIGHTED RATING (NO POPULARITY BIAS)
-    # =========================
-    C = ratings["rating"].mean()
-    m = ratings.groupby("movieId").size().quantile(0.60)
-
-    stats = ratings.groupby("movieId").agg(
-        v=("rating", "count"),
-        R=("rating", "mean")
-    ).reset_index()
-
-    stats["weighted_rating"] = (
-        (stats["v"] / (stats["v"] + m)) * stats["R"] +
-        (m / (stats["v"] + m)) * C
-    )
-
-    movies = movies.merge(stats, on="movieId", how="left")
-    movies["weighted_rating"] = movies["weighted_rating"].fillna(C)
-
-    return movies, ratings, sim_df
+    return movies, data, sim_df
 
 
 movies, ratings, sim_df = load_data()
 
-movie_list = movies["title"].dropna().unique()
+movie_list = sorted(movies["title"].dropna().unique())
 
 # =========================
 # USER INPUT
 # =========================
-st.subheader("Rate Movies")
+st.header("🎯 Rate Movies")
 
 m1 = st.selectbox("Movie 1", movie_list)
-r1 = st.slider("Rating 1", 1.0, 5.0, 3.5)
+r1 = st.slider("Rating 1", 1.0, 5.0, 4.0)
 
 m2 = st.selectbox("Movie 2", movie_list, index=1)
-r2 = st.slider("Rating 2", 1.0, 5.0, 3.5)
+r2 = st.slider("Rating 2", 1.0, 5.0, 4.0)
 
 m3 = st.selectbox("Movie 3", movie_list, index=2)
-r3 = st.slider("Rating 3", 1.0, 5.0, 3.5)
+r3 = st.slider("Rating 3", 1.0, 5.0, 4.0)
 
-user_ratings = [(m1, r1), (m2, r2), (m3, r3)]
+user_input = [(m1, r1), (m2, r2), (m3, r3)]
 
 # =========================
-# RECOMMENDER ENGINE
+# RECOMMENDER
 # =========================
-def recommend(user_ratings):
+def recommend(user_input):
 
-    watched = [m for m, _ in user_ratings]
-    scores = {}
+    watched = [m for m, _ in user_input]
 
-    for movie, rating in user_ratings:
+    content_scores = {}
 
+    for movie in watched:
         if movie not in sim_df.columns:
             continue
 
-        for title, sim_score in sim_df[movie].items():
-
+        for title, score in sim_df[movie].items():
             if title in watched:
                 continue
 
-            wr = movies[movies["title"] == title]["weighted_rating"].values
-            wr = wr[0] if len(wr) > 0 else 3.0
+            content_scores[title] = content_scores.get(title, 0) + score
 
-            score = (sim_score * rating * 0.7) + (wr * 0.3)
+    cb = pd.DataFrame(content_scores.items(), columns=["title", "cb_score"])
 
-            scores[title] = scores.get(title, 0) + score
+    if cb.empty:
+        return pd.DataFrame()
 
-    result = pd.DataFrame(scores.items(), columns=["title", "score"])
-    result = result.sort_values("score", ascending=False).head(10)
+    cb["cb_score"] = cb["cb_score"] / cb["cb_score"].max()
 
-    result = result.merge(
-        movies[["title", "genres", "weighted_rating"]],
-        on="title",
-        how="left"
-    )
+    pop = ratings.groupby("title")["rating"].mean().reset_index()
+    pop.columns = ["title", "popularity"]
+    pop["popularity"] = pop["popularity"] / 5.0
+    pop = pop[~pop["title"].isin(watched)]
 
-    return result
+    hybrid = pd.merge(cb, pop, on="title", how="inner")
+
+    if hybrid.empty:
+        return pd.DataFrame()
+
+    hybrid["final_score"] = 0.6 * hybrid["cb_score"] + 0.4 * hybrid["popularity"]
+
+    hybrid = hybrid.sort_values("final_score", ascending=False).head(10)
+
+    return hybrid.merge(movies[["title", "genres"]], on="title")
 
 
 # =========================
-# OUTPUT UI (CARDS)
+# OUTPUT (ONLY MOVIES + GENRES)
 # =========================
-st.subheader("🎯 Recommendations")
+st.header("🎬 Recommendations")
 
-if st.button("Get Recommendations"):
+show_table = st.checkbox("Show table view")
 
-    recs = recommend(user_ratings)
+if st.button(TEXT[language]["btn"]):
+
+    recs = recommend(user_input)
 
     if recs.empty:
-        st.warning("Not enough data to generate recommendations.")
+        st.warning(TEXT[language]["warn"])
     else:
+        st.success(TEXT[language]["msg"])
+
         for _, row in recs.iterrows():
 
             st.markdown(f"""
-            <div style="
-                background-color:#f5f7ff;
-                padding:15px;
-                border-radius:12px;
-                margin-bottom:10px;
-                border:1px solid #ddd;
-            ">
-                <h4>🎬 {row['title']}</h4>
-                <p><b>Genres:</b> {row['genres']}</p>
-                <p><b>Score:</b> {round(row['score'], 3)}</p>
-                <p><b>Popularity:</b> ⭐ {round(row['weighted_rating'], 2)}</p>
-            </div>
-            """, unsafe_allow_html=True)
+            ### 🎬 {row['title']}
+            **Genres:** {row['genres']}
+            ---
+            """)
+
+        if show_table:
+            st.dataframe(recs[["title", "genres"]])
