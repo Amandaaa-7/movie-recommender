@@ -10,7 +10,7 @@ st.set_page_config(page_title="Movie Recommender", page_icon="🎬", layout="cen
 st.title("🎬 Movie Recommendation System")
 
 # =========================
-# LOAD DATA (SAFE + FAST)
+# LOAD DATA
 # =========================
 @st.cache_data
 def load_data():
@@ -21,32 +21,30 @@ def load_data():
     movies.columns = movies.columns.str.strip()
     ratings.columns = ratings.columns.str.strip()
 
-    # normalize titles (CRITICAL FIX)
     movies["title"] = movies["title"].astype(str).str.strip().str.lower()
     movies["genres"] = movies["genres"].fillna("")
 
-    # safe merge
     ratings = ratings.merge(movies[["movieId", "title"]], on="movieId", how="left")
     ratings = ratings.dropna(subset=["title"])
 
-    # LIMIT SIZE (PREVENT CRASH)
     movies = movies.head(5000).copy()
 
-    # CONTENT MODEL
     tfidf = TfidfVectorizer(stop_words="english")
     tfidf_matrix = tfidf.fit_transform(movies["genres"])
 
-    return movies, ratings, tfidf_matrix
+    sim_matrix = cosine_similarity(tfidf_matrix)
+
+    return movies, ratings, sim_matrix
 
 
-movies, ratings, tfidf_matrix = load_data()
+movies, ratings, sim_matrix = load_data()
 
 movie_list = sorted(movies["title"].unique())
 
 # =========================
 # USER INPUT
 # =========================
-st.subheader("Rate Movies")
+st.subheader("🎯 Rate Movies")
 
 m1 = st.selectbox("Movie 1", movie_list)
 r1 = st.slider("Rating 1", 1.0, 5.0, 4.0)
@@ -60,7 +58,7 @@ r3 = st.slider("Rating 3", 1.0, 5.0, 4.0)
 user_input = [(m1, r1), (m2, r2), (m3, r3)]
 
 # =========================
-# RECOMMENDER (LAZY SAFE VERSION)
+# RECOMMENDER
 # =========================
 def recommend(user_input):
 
@@ -76,8 +74,7 @@ def recommend(user_input):
 
         idx = movies[movies["title"] == movie].index[0]
 
-        # compute similarity ONLY for this movie (NOT full matrix)
-        sim_scores = cosine_similarity(tfidf_matrix[idx], tfidf_matrix).flatten()
+        sim_scores = sim_matrix[idx]
 
         for i, score in enumerate(sim_scores):
 
@@ -86,8 +83,15 @@ def recommend(user_input):
             if title in watched:
                 continue
 
-            # safe weighted score
-            final_score = float(score) * float(rating)
+            genres = str(movies.iloc[i]["genres"])
+
+            # 🔥 reduce "Drama dominance"
+            if genres.count("Drama") == 1 and "|" not in genres:
+                penalty = 0.7
+            else:
+                penalty = 1.0
+
+            final_score = score * rating * penalty
 
             scores[title] = scores.get(title, 0) + final_score
 
@@ -103,7 +107,7 @@ def recommend(user_input):
 
 
 # =========================
-# OUTPUT (NO NUMBERS SHOWN)
+# OUTPUT (ALWAYS BLACK TEXT)
 # =========================
 st.subheader("🎬 Recommendations")
 
@@ -112,22 +116,27 @@ if st.button("Get Recommendations"):
     with st.spinner("Finding movies..."):
         recs = recommend(user_input)
 
-    if recs is None or recs.empty:
+    if recs.empty:
         st.warning("No recommendations found.")
     else:
         for _, row in recs.iterrows():
 
-            html = (
-                "<div style='"
-                "background:#eef3ff;"
-                "padding:12px;"
-                "border-radius:12px;"
-                "margin-bottom:10px;"
-                "color:black;"
-                "'>"
-                f"<h4 style='margin:0; color:black;'>🎬 {row['title'].title()}</h4>"
-                f"<p style='margin:5px 0 0 0; color:black;'>🎭 {row.get('genres','')}</p>"
-                "</div>"
+            st.markdown(
+                f"""
+                <div style="
+                    background:#eef3ff;
+                    padding:12px;
+                    border-radius:10px;
+                    margin-bottom:10px;
+                    color:black;
+                ">
+                    <div style="font-weight:bold; color:black;">
+                        🎬 {row['title'].title()}
+                    </div>
+                    <div style="color:black;">
+                        🎭 {row.get('genres','')}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
             )
-
-            st.markdown(html, unsafe_allow_html=True)
