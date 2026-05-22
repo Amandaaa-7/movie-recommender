@@ -52,11 +52,12 @@ st.markdown("""
 }
 
 .movie-card {
-    background-color: #FFFFFF;
+    background-color: white;
     padding: 15px;
     border-radius: 12px;
     margin-bottom: 15px;
     border-left: 6px solid #DC2626;
+    box-shadow: 0px 2px 6px rgba(0,0,0,0.1);
 }
 
 </style>
@@ -71,7 +72,7 @@ st.markdown(
 )
 
 st.markdown(
-    '<p class="subtitle">Get personalized movie recommendations using Hybrid Recommendation System</p>',
+    '<p class="subtitle">Get personalized movie recommendations using AI</p>',
     unsafe_allow_html=True
 )
 
@@ -86,18 +87,26 @@ language = st.selectbox(
 TEXT = {
     "English": {
         "button": "Get Recommendations",
-        "success": "Recommended Movies",
-        "warning": "Not enough data to generate recommendations."
+        "recommend": "Recommended Movies",
+        "warning": "Not enough data to generate recommendations.",
+        "genres": "Genres",
+        "score": "Score"
     },
+
     "العربية": {
         "button": "عرض التوصيات",
-        "success": "الأفلام المقترحة",
-        "warning": "لا توجد بيانات كافية لإنشاء التوصيات."
+        "recommend": "الأفلام المقترحة",
+        "warning": "لا توجد بيانات كافية لإنشاء التوصيات.",
+        "genres": "النوع",
+        "score": "التقييم"
     },
+
     "Français": {
         "button": "Obtenir des recommandations",
-        "success": "Films recommandés",
-        "warning": "Pas assez de données pour générer des recommandations."
+        "recommend": "Films recommandés",
+        "warning": "Pas assez de données pour générer des recommandations.",
+        "genres": "Genres",
+        "score": "Score"
     }
 }
 
@@ -141,7 +150,9 @@ def load_data():
 
 movies, ratings_base, similarity_df = load_data()
 
-movie_list = sorted(movies["title"].dropna().unique())
+movie_list = sorted(
+    movies["title"].dropna().unique()
+)
 
 # =========================
 # USER INPUT
@@ -254,13 +265,13 @@ if st.button(TEXT[language]["button"]):
 
         recs = recommend(user_input)
 
-    if recs.empty():
+    if recs.empty:
 
         st.warning(TEXT[language]["warning"])
 
     else:
 
-        st.subheader(f"🍿 {TEXT[language]['success']}")
+        st.subheader(f"🍿 {TEXT[language]['recommend']}")
 
         for _, row in recs.iterrows():
 
@@ -268,11 +279,9 @@ if st.button(TEXT[language]["button"]):
                 f"""
                 <div class="movie-card">
                     <h4>🎬 {row['title']}</h4>
-                    <p><b>Genres:</b> {row['genres']}</p>
-                    <p><b>Score:</b> {round(row['final_score'], 2)}</p>
+                    <p><b>{TEXT[language]['genres']}:</b> {row['genres']}</p>
+                    <p><b>{TEXT[language]['score']}:</b> {round(row['final_score'], 2)}</p>
                 </div>
                 """,
                 unsafe_allow_html=True
             )
-
-        st.balloons()
