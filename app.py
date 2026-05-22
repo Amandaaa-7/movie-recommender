@@ -3,13 +3,107 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# ---------------- UI ----------------
-st.set_page_config(page_title="Movie Recommender", page_icon="🎬")
+# =========================
+# PAGE CONFIG
+# =========================
+st.set_page_config(
+    page_title="Movie Recommender",
+    page_icon="🎬",
+    layout="centered"
+)
 
-st.title("🎬 Hybrid Movie Recommendation System")
-st.write("Select movies you like and get recommendations.")
+# =========================
+# CUSTOM CSS
+# =========================
+st.markdown("""
+<style>
 
-# ---------------- LOAD DATA ----------------
+.main {
+    background-color: #f5f7fa;
+}
+
+.stButton>button {
+    width: 100%;
+    background-color: #DC2626;
+    color: white;
+    border-radius: 12px;
+    height: 50px;
+    font-size: 18px;
+    font-weight: bold;
+    border: none;
+}
+
+.stButton>button:hover {
+    background-color: #B91C1C;
+    color: white;
+}
+
+.title {
+    text-align: center;
+    font-size: 42px;
+    font-weight: bold;
+    color: #991B1B;
+}
+
+.subtitle {
+    text-align: center;
+    color: gray;
+    margin-bottom: 30px;
+}
+
+.movie-card {
+    background-color: #FFFFFF;
+    padding: 15px;
+    border-radius: 12px;
+    margin-bottom: 15px;
+    border-left: 6px solid #DC2626;
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+# =========================
+# TITLE
+# =========================
+st.markdown(
+    '<p class="title">🎬 Hybrid Movie Recommendation System</p>',
+    unsafe_allow_html=True
+)
+
+st.markdown(
+    '<p class="subtitle">Get personalized movie recommendations using Hybrid Recommendation System</p>',
+    unsafe_allow_html=True
+)
+
+# =========================
+# LANGUAGE
+# =========================
+language = st.selectbox(
+    "🌍 Language",
+    ["English", "العربية", "Français"]
+)
+
+TEXT = {
+    "English": {
+        "button": "Get Recommendations",
+        "success": "Recommended Movies",
+        "warning": "Not enough data to generate recommendations."
+    },
+    "العربية": {
+        "button": "عرض التوصيات",
+        "success": "الأفلام المقترحة",
+        "warning": "لا توجد بيانات كافية لإنشاء التوصيات."
+    },
+    "Français": {
+        "button": "Obtenir des recommandations",
+        "success": "Films recommandés",
+        "warning": "Pas assez de données pour générer des recommandations."
+    }
+}
+
+# =========================
+# LOAD DATA
+# =========================
 @st.cache_data
 def load_data():
 
@@ -22,14 +116,17 @@ def load_data():
     )
 
     ratings.rename(
-        columns={"userId": "user_id", "movieId": "movie_id"},
+        columns={
+            "userId": "user_id",
+            "movieId": "movie_id"
+        },
         inplace=True
     )
 
-    # CONTENT-BASED
     movies["genres"] = movies["genres"].fillna("")
 
     tfidf = TfidfVectorizer(stop_words="english")
+
     tfidf_matrix = tfidf.fit_transform(movies["genres"])
 
     similarity = cosine_similarity(tfidf_matrix)
@@ -42,13 +139,14 @@ def load_data():
 
     return movies, ratings, similarity_df
 
-
 movies, ratings_base, similarity_df = load_data()
 
 movie_list = sorted(movies["title"].dropna().unique())
 
-# ---------------- USER INPUT ----------------
-st.header("Step 1: Rate Movies")
+# =========================
+# USER INPUT
+# =========================
+st.subheader("🎥 Select Movies")
 
 m1 = st.selectbox("Movie 1", movie_list)
 r1 = st.slider("Rating 1", 1.0, 5.0, 4.0)
@@ -59,58 +157,85 @@ r2 = st.slider("Rating 2", 1.0, 5.0, 4.0)
 m3 = st.selectbox("Movie 3", movie_list, index=2)
 r3 = st.slider("Rating 3", 1.0, 5.0, 4.0)
 
-user_input = [(m1, r1), (m2, r2), (m3, r3)]
+user_input = [
+    (m1, r1),
+    (m2, r2),
+    (m3, r3)
+]
 
-# ---------------- RECOMMENDER ----------------
+# =========================
+# RECOMMENDER
+# =========================
 def recommend(user_input):
 
     watched = [m for m, _ in user_input]
 
-    # ---------------- CONTENT BASED ----------------
     content_scores = {}
 
     for movie in watched:
+
         if movie not in similarity_df.columns:
             continue
 
         for title, score in similarity_df[movie].items():
+
             if title in watched:
                 continue
 
-            content_scores[title] = content_scores.get(title, 0) + score
+            content_scores[title] = (
+                content_scores.get(title, 0) + score
+            )
 
-    cb_df = pd.DataFrame(content_scores.items(), columns=["title", "cb_score"])
+    cb_df = pd.DataFrame(
+        content_scores.items(),
+        columns=["title", "cb_score"]
+    )
 
-    # ---------------- SIMPLE COLLAB FILTER ----------------
     cf_scores = {}
 
     for movie in watched:
-        user_ratings = [r for m, r in user_input if m == movie]
+
+        user_ratings = [
+            r for m, r in user_input if m == movie
+        ]
+
         if not user_ratings:
             continue
 
         for _, row in ratings_base.iterrows():
+
             if row["title"] in watched:
                 continue
-            cf_scores[row["title"]] = cf_scores.get(row["title"], 0) + user_ratings[0]
 
-    cf_df = pd.DataFrame(cf_scores.items(), columns=["title", "cf_score"])
+            cf_scores[row["title"]] = (
+                cf_scores.get(row["title"], 0)
+                + user_ratings[0]
+            )
 
-    # ---------------- HYBRID ----------------
-    hybrid = pd.merge(cb_df, cf_df, on="title", how="inner")
+    cf_df = pd.DataFrame(
+        cf_scores.items(),
+        columns=["title", "cf_score"]
+    )
+
+    hybrid = pd.merge(
+        cb_df,
+        cf_df,
+        on="title",
+        how="inner"
+    )
 
     if hybrid.empty:
         return pd.DataFrame()
-
-    # FAKE SVD SCORE (SAFE REPLACEMENT)
-    hybrid["svd_score"] = 3.5
 
     hybrid["final_score"] = (
         0.5 * hybrid["cb_score"] +
         0.5 * hybrid["cf_score"]
     )
 
-    hybrid = hybrid.sort_values("final_score", ascending=False).head(10)
+    hybrid = hybrid.sort_values(
+        "final_score",
+        ascending=False
+    ).head(10)
 
     result = pd.merge(
         hybrid,
@@ -120,23 +245,34 @@ def recommend(user_input):
 
     return result
 
+# =========================
+# BUTTON
+# =========================
+if st.button(TEXT[language]["button"]):
 
-# ---------------- OUTPUT ----------------
-st.header("Step 2: Recommendations")
+    with st.spinner("Loading Recommendations..."):
 
-if st.button("Get Recommendations"):
-
-    with st.spinner("Generating recommendations..."):
         recs = recommend(user_input)
 
-    if recs.empty:
-        st.warning("Not enough data to generate recommendations.")
+    if recs.empty():
+
+        st.warning(TEXT[language]["warning"])
+
     else:
-        st.dataframe(
-            recs.rename(columns={
-                "title": "Movie",
-                "genres": "Genres",
-                "final_score": "Score"
-            })
-        )
-    
+
+        st.subheader(f"🍿 {TEXT[language]['success']}")
+
+        for _, row in recs.iterrows():
+
+            st.markdown(
+                f"""
+                <div class="movie-card">
+                    <h4>🎬 {row['title']}</h4>
+                    <p><b>Genres:</b> {row['genres']}</p>
+                    <p><b>Score:</b> {round(row['final_score'], 2)}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        st.balloons()
