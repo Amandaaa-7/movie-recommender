@@ -13,34 +13,14 @@ st.set_page_config(
     layout="centered"
 )
 
-# =========================
-# TITLE
-# =========================
 st.title("🎬 Hybrid Movie Recommendation System")
 
-st.write("Content-based + Collaborative filtering (clean deployment version)")
-
-# =========================
-# LANGUAGE SUPPORT
-# =========================
 language = st.selectbox("🌍 Language", ["English", "Arabic", "French"])
 
 TEXT = {
-    "English": {
-        "btn": "Get Recommendations",
-        "msg": "Top Recommendations",
-        "warn": "Not enough data"
-    },
-    "Arabic": {
-        "btn": "الحصول على التوصيات",
-        "msg": "أفضل الأفلام المقترحة",
-        "warn": "لا توجد بيانات كافية"
-    },
-    "French": {
-        "btn": "Obtenir des recommandations",
-        "msg": "Meilleurs films recommandés",
-        "warn": "Pas assez de données"
-    }
+    "English": {"btn": "Get Recommendations", "msg": "Top Movies", "warn": "No results"},
+    "Arabic": {"btn": "احصل على التوصيات", "msg": "أفضل الأفلام", "warn": "لا توجد نتائج"},
+    "French": {"btn": "Recommander", "msg": "Meilleurs films", "warn": "Aucun résultat"}
 }
 
 # =========================
@@ -52,34 +32,28 @@ def load_data():
     movies = pd.read_csv("movies.csv")
     ratings = pd.read_csv("ratings.csv")
 
-    # clean columns
     movies.columns = movies.columns.str.strip()
     ratings.columns = ratings.columns.str.strip()
 
-    # merge
     data = ratings.merge(movies, on="movieId")
 
-    # content preprocessing
     movies["genres"] = movies["genres"].fillna("")
 
     tfidf = TfidfVectorizer(stop_words="english")
     tfidf_matrix = tfidf.fit_transform(movies["genres"])
 
-    similarity = cosine_similarity(tfidf_matrix)
+    sim = cosine_similarity(tfidf_matrix)
 
     sim_df = pd.DataFrame(
-        similarity,
+        sim,
         index=movies["title"],
         columns=movies["title"]
     )
 
-    # collaborative filtering proxy (stable version)
-    cf_scores = data.groupby("movieId")["rating"].mean().to_dict()
-
-    return movies, data, sim_df, cf_scores
+    return movies, data, sim_df
 
 
-movies, ratings, sim_df, cf_scores = load_data()
+movies, ratings, sim_df = load_data()
 
 movie_list = sorted(movies["title"].dropna().unique())
 
@@ -100,13 +74,13 @@ r3 = st.slider("Rating 3", 1.0, 5.0, 4.0)
 user_input = [(m1, r1), (m2, r2), (m3, r3)]
 
 # =========================
-# RECOMMENDER FUNCTION
+# RECOMMENDER
 # =========================
 def recommend(user_input):
 
     watched = [m for m, _ in user_input]
 
-    # ---------------- CONTENT BASED ----------------
+    # CONTENT SCORE
     content_scores = {}
 
     for movie in watched:
@@ -116,40 +90,31 @@ def recommend(user_input):
         for title, score in sim_df[movie].items():
             if title in watched:
                 continue
-
             content_scores[title] = content_scores.get(title, 0) + score
 
-    cb_df = pd.DataFrame(content_scores.items(), columns=["title", "cb_score"])
+    cb = pd.DataFrame(content_scores.items(), columns=["title", "cb_score"])
 
-    # normalize
-    if not cb_df.empty:
-        cb_df["cb_score"] = cb_df["cb_score"] / cb_df["cb_score"].max()
+    if not cb.empty:
+        cb["cb_score"] = cb["cb_score"] / cb["cb_score"].max()
 
-    # ---------------- COLLAB FILTER (SAFE) ----------------
-    cf_df = ratings.groupby("title")["rating"].mean().reset_index()
-    cf_df.columns = ["title", "cf_score"]
+    # POPULARITY (simple CF proxy)
+    pop = ratings.groupby("title")["rating"].mean().reset_index()
+    pop.columns = ["title", "popularity"]
+    pop["popularity"] = pop["popularity"] / 5.0
 
-    cf_df = cf_df[~cf_df["title"].isin(watched)]
+    pop = pop[~pop["title"].isin(watched)]
 
-    if not cf_df.empty:
-        cf_df["cf_score"] = cf_df["cf_score"] / 5.0  # FIX SCALE
-
-    # ---------------- HYBRID ----------------
-    hybrid = pd.merge(cb_df, cf_df, on="title", how="inner")
+    # HYBRID
+    hybrid = pd.merge(cb, pop, on="title", how="inner")
 
     if hybrid.empty:
         return pd.DataFrame()
 
-    hybrid["final_score"] = (
-        0.5 * hybrid["cb_score"] +
-        0.5 * hybrid["cf_score"]
-    )
+    hybrid["final_score"] = 0.6 * hybrid["cb_score"] + 0.4 * hybrid["popularity"]
 
     hybrid = hybrid.sort_values("final_score", ascending=False).head(10)
 
-    result = hybrid.merge(movies[["title", "genres"]], on="title")
-
-    return result
+    return hybrid.merge(movies[["title", "genres"]], on="title")
 
 
 # =========================
@@ -157,20 +122,28 @@ def recommend(user_input):
 # =========================
 st.header("🎬 Recommendations")
 
+show_table = st.checkbox("Show table view")
+
 if st.button(TEXT[language]["btn"]):
 
-    with st.spinner("Processing..."):
-        recs = recommend(user_input)
+    recs = recommend(user_input)
 
     if recs.empty:
         st.warning(TEXT[language]["warn"])
     else:
         st.success(TEXT[language]["msg"])
 
-        st.dataframe(
-            recs[["title", "genres", "final_score"]].rename(columns={
-                "title": "Movie",
-                "genres": "Genres",
-                "final_score": "Score"
-            })
-        )
+        for _, row in recs.iterrows():
+
+            stars = "⭐" * int(round(row["popularity"] * 5))
+
+            st.markdown(f"""
+            ### 🎬 {row['title']}
+            **Genres:** {row['genres']}  
+            **Score:** {round(row['final_score'], 3)}  
+            **Popularity:** {stars}
+            ---
+            """)
+
+        if show_table:
+            st.dataframe(recs)
