@@ -116,14 +116,21 @@ if st.button("Get Recommendations"):
         st.warning("No recommendations found.")
     else:
         for _, row in recs.iterrows():
+
             st.markdown(f"""
             <div style="
                 background:#eef3ff;
                 padding:12px;
                 border-radius:12px;
                 margin-bottom:10px;
+                color:black;
             ">
-                <h4>🎬 {row['title'].title()}</h4>
-                <p>🎭 {row.get('genres','')}</p>
+                <h4 style="margin:0; color:black;">
+                    🎬 {row['title'].title()}
+                </h4>
+
+                <p style="margin:5px 0 0 0; color:black;">
+                    🎭 {row.get('genres','')}
+                </p>
             </div>
             """, unsafe_allow_html=True)
