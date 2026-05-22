@@ -5,13 +5,18 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 # =========================
-# CONFIG
+# PAGE CONFIG
 # =========================
-st.set_page_config(page_title="Hybrid Movie Recommender", page_icon="🎬")
-st.title("🎬 Production-Grade Hybrid Movie Recommender")
+st.set_page_config(
+    page_title="Hybrid Movie Recommender",
+    page_icon="🎬",
+    layout="centered"
+)
+
+st.title("🎬 Hybrid Movie Recommendation System")
 
 # =========================
-# SAFE DATA LOADER
+# LOAD DATA (SAFE)
 # =========================
 @st.cache_data
 def load_data():
@@ -19,111 +24,110 @@ def load_data():
     movies = pd.read_csv("movies.csv")
     ratings = pd.read_csv("ratings.csv")
 
+    # clean column names (CRITICAL)
     movies.columns = movies.columns.str.strip()
     ratings.columns = ratings.columns.str.strip()
 
     # =========================
-    # FIX: normalize text (CRITICAL)
+    # DETECT MOVIE ID COLUMN
     # =========================
-    movies["title"] = movies["title"].astype(str).str.strip().str.lower()
-    movies["genres"] = movies["genres"].fillna("")
-
-    # detect id column safely
-    def detect_id(df):
+    def find_col(df, options):
         for c in df.columns:
-            if c.lower() in ["movieid", "movie_id", "id"]:
+            if c.lower() in options:
                 return c
         return None
 
-    m_id = detect_id(movies)
-    r_id = detect_id(ratings)
+    movies_id = find_col(movies, ["movieid", "movie_id", "id"])
+    ratings_id = find_col(ratings, ["movieid", "movie_id", "id"])
 
-    if m_id is None or r_id is None:
-        st.error("Missing movieId column in dataset")
+    if movies_id is None or ratings_id is None:
+        st.error("Missing movieId column in one of the datasets.")
         st.stop()
 
-    movies = movies.rename(columns={m_id: "movieId"})
-    ratings = ratings.rename(columns={r_id: "movieId"})
-
-    # merge safely
-    ratings = ratings.merge(movies[["movieId", "title"]], on="movieId", how="left")
-    ratings = ratings.dropna(subset=["title"])
-
-    ratings["title"] = ratings["title"].str.strip().str.lower()
+    movies = movies.rename(columns={movies_id: "movieId"})
+    ratings = ratings.rename(columns={ratings_id: "movieId"})
 
     # =========================
-    # CONTENT-BASED (FIX O(n²) RISK)
+    # MERGE SAFE
     # =========================
-    MAX_MOVIES = 5000
-    movies_small = movies.head(MAX_MOVIES)
+    if "title" not in movies.columns:
+        st.error("movies.csv must contain 'title'")
+        st.stop()
+
+    ratings = ratings.merge(
+        movies[["movieId", "title"]],
+        on="movieId",
+        how="left"
+    )
+
+    # =========================
+    # CONTENT BASED MODEL
+    # =========================
+    if "genres" not in movies.columns:
+        movies["genres"] = ""
 
     tfidf = TfidfVectorizer(stop_words="english")
-    tfidf_matrix = tfidf.fit_transform(movies_small["genres"])
+    tfidf_matrix = tfidf.fit_transform(movies["genres"])
 
     sim = cosine_similarity(tfidf_matrix)
 
     sim_df = pd.DataFrame(
         sim,
-        index=movies_small["title"],
-        columns=movies_small["title"]
+        index=movies["title"],
+        columns=movies["title"]
     )
 
     # =========================
-    # WEIGHTED POPULARITY (UNBIASED)
+    # WEIGHTED RATING (NO POPULARITY BIAS)
     # =========================
     C = ratings["rating"].mean()
-    m = ratings.groupby("movieId").size().quantile(0.6)
+    m = ratings.groupby("movieId").size().quantile(0.60)
 
     stats = ratings.groupby("movieId").agg(
-        count=("rating", "count"),
-        mean=("rating", "mean")
+        v=("rating", "count"),
+        R=("rating", "mean")
     ).reset_index()
 
-    stats["weighted"] = (
-        (stats["count"] / (stats["count"] + m)) * stats["mean"]
-        + (m / (stats["count"] + m)) * C
+    stats["weighted_rating"] = (
+        (stats["v"] / (stats["v"] + m)) * stats["R"] +
+        (m / (stats["v"] + m)) * C
     )
 
-    movies = movies.merge(stats[["movieId", "weighted"]], on="movieId", how="left")
-    movies["weighted"] = movies["weighted"].fillna(C)
+    movies = movies.merge(stats, on="movieId", how="left")
+    movies["weighted_rating"] = movies["weighted_rating"].fillna(C)
 
-    movies["title"] = movies["title"].str.strip().str.lower()
-
-    return movies, sim_df, ratings
+    return movies, ratings, sim_df
 
 
-movies, sim_df, ratings = load_data()
+movies, ratings, sim_df = load_data()
 
-movie_list = sorted(movies["title"].dropna().unique())
+movie_list = movies["title"].dropna().unique()
 
 # =========================
 # USER INPUT
 # =========================
 st.subheader("Rate Movies")
 
-def safe_index(i):
-    return min(i, len(movie_list) - 1)
-
 m1 = st.selectbox("Movie 1", movie_list)
 r1 = st.slider("Rating 1", 1.0, 5.0, 3.5)
 
-m2 = st.selectbox("Movie 2", movie_list, index=safe_index(1))
+m2 = st.selectbox("Movie 2", movie_list, index=1)
 r2 = st.slider("Rating 2", 1.0, 5.0, 3.5)
 
-m3 = st.selectbox("Movie 3", movie_list, index=safe_index(2))
+m3 = st.selectbox("Movie 3", movie_list, index=2)
 r3 = st.slider("Rating 3", 1.0, 5.0, 3.5)
 
-user_input = [(m1, r1), (m2, r2), (m3, r3)]
+user_ratings = [(m1, r1), (m2, r2), (m3, r3)]
 
 # =========================
-# RECOMMENDER (FIXED + STABLE)
+# RECOMMENDER ENGINE
 # =========================
-def recommend(user_input):
+def recommend(user_ratings):
 
-    watched = set([m for m, _ in user_input])
+    watched = [m for m, _ in user_ratings]
     scores = {}
 
-    for movie, rating in user_input:
+    for movie, rating in user_ratings:
 
         if movie not in sim_df.columns:
             continue
@@ -133,31 +137,23 @@ def recommend(user_input):
             if title in watched:
                 continue
 
-            w = movies.loc[movies["title"] == title, "weighted"]
+            wr = movies[movies["title"] == title]["weighted_rating"].values
+            wr = wr[0] if len(wr) > 0 else 3.0
 
-            if len(w) == 0:
-                weighted = ratings["rating"].mean()
-            else:
-                weighted = float(w.values[0])
-
-            # improved hybrid score (stable + normalized)
-            score = (sim_score * rating) + (0.2 * weighted)
+            score = (sim_score * rating * 0.7) + (wr * 0.3)
 
             scores[title] = scores.get(title, 0) + score
 
-    if not scores:
-        return pd.DataFrame()
+    result = pd.DataFrame(scores.items(), columns=["title", "score"])
+    result = result.sort_values("score", ascending=False).head(10)
 
-    out = pd.DataFrame(scores.items(), columns=["title", "score"])
-    out = out.sort_values("score", ascending=False).head(10)
-
-    out = out.merge(
-        movies[["title", "genres", "weighted"]],
+    result = result.merge(
+        movies[["title", "genres", "weighted_rating"]],
         on="title",
         how="left"
     )
 
-    return out
+    return result
 
 
 # =========================
@@ -167,8 +163,7 @@ st.subheader("🎯 Recommendations")
 
 if st.button("Get Recommendations"):
 
-    with st.spinner("Generating recommendations..."):
-        recs = recommend(user_input)
+    recs = recommend(user_ratings)
 
     if recs.empty:
         st.warning("Not enough data to generate recommendations.")
@@ -177,14 +172,15 @@ if st.button("Get Recommendations"):
 
             st.markdown(f"""
             <div style="
-                background-color:#eef3ff;
-                padding:12px;
-                border-radius:10px;
+                background-color:#f5f7ff;
+                padding:15px;
+                border-radius:12px;
                 margin-bottom:10px;
+                border:1px solid #ddd;
             ">
-                <h4>🎬 {row['title'].title()}</h4>
-                <p>🎭 {row.get('genres','')}</p>
-                <p>⭐ Score: {round(row['score'], 3)}</p>
-                <p>📊 Weighted Rating: {round(row['weighted'], 2)}</p>
+                <h4>🎬 {row['title']}</h4>
+                <p><b>Genres:</b> {row['genres']}</p>
+                <p><b>Score:</b> {round(row['score'], 3)}</p>
+                <p><b>Popularity:</b> ⭐ {round(row['weighted_rating'], 2)}</p>
             </div>
             """, unsafe_allow_html=True)
