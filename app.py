@@ -3,11 +3,14 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-st.set_page_config(page_title="Movie Recommender", page_icon="🎬")
+# =========================
+# CONFIG
+# =========================
+st.set_page_config(page_title="Movie Recommender", page_icon="🎬", layout="centered")
 st.title("🎬 Movie Recommendation System")
 
 # =========================
-# LOAD DATA
+# LOAD DATA (SAFE + FAST)
 # =========================
 @st.cache_data
 def load_data():
@@ -18,32 +21,30 @@ def load_data():
     movies.columns = movies.columns.str.strip()
     ratings.columns = ratings.columns.str.strip()
 
+    # normalize titles (CRITICAL FIX)
     movies["title"] = movies["title"].astype(str).str.strip().str.lower()
     movies["genres"] = movies["genres"].fillna("")
 
+    # safe merge
     ratings = ratings.merge(movies[["movieId", "title"]], on="movieId", how="left")
     ratings = ratings.dropna(subset=["title"])
 
+    # LIMIT SIZE (PREVENT CRASH)
+    movies = movies.head(5000).copy()
+
+    # CONTENT MODEL
     tfidf = TfidfVectorizer(stop_words="english")
     tfidf_matrix = tfidf.fit_transform(movies["genres"])
 
-    sim = cosine_similarity(tfidf_matrix)
-
-    sim_df = pd.DataFrame(
-        sim,
-        index=movies["title"],
-        columns=movies["title"]
-    )
-
-    return movies, ratings, sim_df
+    return movies, ratings, tfidf_matrix
 
 
-movies, ratings, sim_df = load_data()
+movies, ratings, tfidf_matrix = load_data()
 
-movie_list = sorted(movies["title"].dropna().unique())
+movie_list = sorted(movies["title"].unique())
 
 # =========================
-# INPUT
+# USER INPUT
 # =========================
 st.subheader("Rate Movies")
 
@@ -59,7 +60,7 @@ r3 = st.slider("Rating 3", 1.0, 5.0, 4.0)
 user_input = [(m1, r1), (m2, r2), (m3, r3)]
 
 # =========================
-# RECOMMENDER (SAFE)
+# RECOMMENDER (LAZY SAFE VERSION)
 # =========================
 def recommend(user_input):
 
@@ -70,28 +71,35 @@ def recommend(user_input):
 
         movie = movie.lower()
 
-        if movie not in sim_df.columns:
+        if movie not in movies["title"].values:
             continue
 
-        for title, sim_score in sim_df[movie].items():
+        idx = movies[movies["title"] == movie].index[0]
+
+        # compute similarity ONLY for this movie (NOT full matrix)
+        sim_scores = cosine_similarity(tfidf_matrix[idx], tfidf_matrix).flatten()
+
+        for i, score in enumerate(sim_scores):
+
+            title = movies.iloc[i]["title"]
 
             if title in watched:
                 continue
 
-            # normalize score
-            score = float(sim_score) * float(rating)
+            # safe weighted score
+            final_score = float(score) * float(rating)
 
-            scores[title] = scores.get(title, 0) + score
+            scores[title] = scores.get(title, 0) + final_score
 
     if not scores:
         return pd.DataFrame()
 
-    out = pd.DataFrame(scores.items(), columns=["title", "score"])
-    out = out.sort_values("score", ascending=False).head(10)
+    recs = pd.DataFrame(scores.items(), columns=["title", "score"])
+    recs = recs.sort_values("score", ascending=False).head(10)
 
-    out = out.merge(movies[["title", "genres"]], on="title", how="left")
+    recs = recs.merge(movies[["title", "genres"]], on="title", how="left")
 
-    return out
+    return recs
 
 
 # =========================
@@ -101,17 +109,18 @@ st.subheader("🎬 Recommendations")
 
 if st.button("Get Recommendations"):
 
-    recs = recommend(user_input)
+    with st.spinner("Finding movies..."):
+        recs = recommend(user_input)
 
     if recs.empty:
-        st.warning("No recommendations found")
+        st.warning("No recommendations found.")
     else:
         for _, row in recs.iterrows():
             st.markdown(f"""
             <div style="
                 background:#eef3ff;
                 padding:12px;
-                border-radius:10px;
+                border-radius:12px;
                 margin-bottom:10px;
             ">
                 <h4>🎬 {row['title'].title()}</h4>
