@@ -1,20 +1,15 @@
 import streamlit as st
 import pandas as pd
+import joblib
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# =========================
-# PAGE CONFIG
-# =========================
 st.set_page_config(
-    page_title="Movie Recommender",
+    page_title="Movie Recommendation System",
     page_icon="🎬",
     layout="centered"
 )
 
-# =========================
-# CUSTOM CSS
-# =========================
 st.markdown("""
 <style>
 
@@ -22,9 +17,22 @@ st.markdown("""
     background-color: #f5f7fa;
 }
 
+.title {
+    text-align: center;
+    font-size: 42px;
+    font-weight: bold;
+    color: #7C3AED;
+}
+
+.subtitle {
+    text-align: center;
+    color: gray;
+    margin-bottom: 30px;
+}
+
 .stButton>button {
     width: 100%;
-    background-color: #DC2626;
+    background-color: #7C3AED;
     color: white;
     border-radius: 12px;
     height: 50px;
@@ -34,51 +42,32 @@ st.markdown("""
 }
 
 .stButton>button:hover {
-    background-color: #B91C1C;
+    background-color: #6D28D9;
     color: white;
 }
 
-.title {
-    text-align: center;
-    font-size: 42px;
-    font-weight: bold;
-    color: #991B1B;
-}
-
-.subtitle {
-    text-align: center;
-    color: gray;
-    margin-bottom: 30px;
-}
-
-.movie-card {
-    background-color: white;
+.result-box {
+    background-color: #EDE9FE;
     padding: 15px;
     border-radius: 12px;
-    margin-bottom: 15px;
-    border-left: 6px solid #DC2626;
-    box-shadow: 0px 2px 6px rgba(0,0,0,0.1);
+    color: #4C1D95;
+    font-size: 18px;
+    font-weight: bold;
 }
 
 </style>
 """, unsafe_allow_html=True)
 
-# =========================
-# TITLE
-# =========================
 st.markdown(
     '<p class="title">🎬 Hybrid Movie Recommendation System</p>',
     unsafe_allow_html=True
 )
 
 st.markdown(
-    '<p class="subtitle">Get personalized movie recommendations using AI</p>',
+    '<p class="subtitle">Get personalized movie recommendations using Hybrid Recommendation</p>',
     unsafe_allow_html=True
 )
 
-# =========================
-# LANGUAGE
-# =========================
 language = st.selectbox(
     "🌍 Language",
     ["English", "العربية", "Français"]
@@ -87,32 +76,21 @@ language = st.selectbox(
 TEXT = {
     "English": {
         "button": "Get Recommendations",
-        "recommend": "Recommended Movies",
-        "warning": "Not enough data to generate recommendations.",
-        "genres": "Genres",
-        "score": "Score"
+        "header": "Recommended Movies",
+        "empty": "No recommendations found"
     },
-
     "العربية": {
         "button": "عرض التوصيات",
-        "recommend": "الأفلام المقترحة",
-        "warning": "لا توجد بيانات كافية لإنشاء التوصيات.",
-        "genres": "النوع",
-        "score": "التقييم"
+        "header": "الأفلام المقترحة",
+        "empty": "لا توجد توصيات"
     },
-
     "Français": {
         "button": "Obtenir des recommandations",
-        "recommend": "Films recommandés",
-        "warning": "Pas assez de données pour générer des recommandations.",
-        "genres": "Genres",
-        "score": "Score"
+        "header": "Films recommandés",
+        "empty": "Aucune recommandation trouvée"
     }
 }
 
-# =========================
-# LOAD DATA
-# =========================
 @st.cache_data
 def load_data():
 
@@ -150,36 +128,28 @@ def load_data():
 
 movies, ratings_base, similarity_df = load_data()
 
-movie_list = sorted(
-    movies["title"].dropna().unique()
-)
+movie_list = sorted(movies["title"].dropna().unique())
 
-# =========================
-# USER INPUT
-# =========================
 st.subheader("🎥 Select Movies")
 
-m1 = st.selectbox("Movie 1", movie_list)
-r1 = st.slider("Rating 1", 1.0, 5.0, 4.0)
+movie1 = st.selectbox("Movie 1", movie_list)
+rating1 = st.slider("Rating 1", 1.0, 5.0, 4.0)
 
-m2 = st.selectbox("Movie 2", movie_list, index=1)
-r2 = st.slider("Rating 2", 1.0, 5.0, 4.0)
+movie2 = st.selectbox("Movie 2", movie_list, index=1)
+rating2 = st.slider("Rating 2", 1.0, 5.0, 4.0)
 
-m3 = st.selectbox("Movie 3", movie_list, index=2)
-r3 = st.slider("Rating 3", 1.0, 5.0, 4.0)
+movie3 = st.selectbox("Movie 3", movie_list, index=2)
+rating3 = st.slider("Rating 3", 1.0, 5.0, 4.0)
 
 user_input = [
-    (m1, r1),
-    (m2, r2),
-    (m3, r3)
+    (movie1, rating1),
+    (movie2, rating2),
+    (movie3, rating3)
 ]
 
-# =========================
-# RECOMMENDER
-# =========================
 def recommend(user_input):
 
-    watched = [m for m, _ in user_input]
+    watched = [m for m, r in user_input]
 
     content_scores = {}
 
@@ -188,7 +158,9 @@ def recommend(user_input):
         if movie not in similarity_df.columns:
             continue
 
-        for title, score in similarity_df[movie].items():
+        similar_movies = similarity_df[movie].sort_values(ascending=False)
+
+        for title, score in similar_movies.items():
 
             if title in watched:
                 continue
@@ -197,31 +169,42 @@ def recommend(user_input):
                 content_scores.get(title, 0) + score
             )
 
+    if len(content_scores) == 0:
+        return pd.DataFrame()
+
     cb_df = pd.DataFrame(
         content_scores.items(),
-        columns=["title", "cb_score"]
+        columns=["title", "content_score"]
     )
 
     cf_scores = {}
 
-    for movie in watched:
+    for movie, rating in user_input:
 
-        user_ratings = [
-            r for m, r in user_input if m == movie
+        related = ratings_base[
+            ratings_base["title"] == movie
         ]
 
-        if not user_ratings:
+        if related.empty:
             continue
 
-        for _, row in ratings_base.iterrows():
+        users = related["user_id"].unique()
 
-            if row["title"] in watched:
+        similar_user_movies = ratings_base[
+            ratings_base["user_id"].isin(users)
+        ]
+
+        for title in similar_user_movies["title"]:
+
+            if title in watched:
                 continue
 
-            cf_scores[row["title"]] = (
-                cf_scores.get(row["title"], 0)
-                + user_ratings[0]
+            cf_scores[title] = (
+                cf_scores.get(title, 0) + rating
             )
+
+    if len(cf_scores) == 0:
+        return pd.DataFrame()
 
     cf_df = pd.DataFrame(
         cf_scores.items(),
@@ -239,7 +222,7 @@ def recommend(user_input):
         return pd.DataFrame()
 
     hybrid["final_score"] = (
-        0.5 * hybrid["cb_score"] +
+        0.5 * hybrid["content_score"] +
         0.5 * hybrid["cf_score"]
     )
 
@@ -251,37 +234,40 @@ def recommend(user_input):
     result = pd.merge(
         hybrid,
         movies[["title", "genres"]],
-        on="title"
+        on="title",
+        how="left"
     )
 
     return result
 
-# =========================
-# BUTTON
-# =========================
 if st.button(TEXT[language]["button"]):
 
-    with st.spinner("Loading Recommendations..."):
+    try:
 
-        recs = recommend(user_input)
+        recommendations = recommend(user_input)
 
-    if recs.empty:
+        st.subheader(f"🎬 {TEXT[language]['header']}")
 
-        st.warning(TEXT[language]["warning"])
+        if recommendations.empty:
 
-    else:
+            st.warning(TEXT[language]["empty"])
 
-        st.subheader(f"🍿 {TEXT[language]['recommend']}")
+        else:
 
-        for _, row in recs.iterrows():
+            for i, row in recommendations.iterrows():
 
-            st.markdown(
-                f"""
-                <div class="movie-card">
-                    <h4>🎬 {row['title']}</h4>
-                    <p><b>{TEXT[language]['genres']}:</b> {row['genres']}</p>
-                    <p><b>{TEXT[language]['score']}:</b> {round(row['final_score'], 2)}</p>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+                st.markdown(
+                    f"""
+                    <div class="result-box">
+                    🎥 {row['title']} <br>
+                    🎭 {row['genres']} <br>
+                    ⭐ Score: {round(row['final_score'], 2)}
+                    </div>
+                    <br>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+    except Exception as e:
+
+        st.error(f"Error: {e}")
