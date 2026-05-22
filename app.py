@@ -15,135 +15,135 @@ st.set_page_config(
 
 st.title("🎬 Hybrid Movie Recommendation System")
 
-language = st.selectbox("🌍 Language", ["English", "Arabic", "French"])
-
-TEXT = {
-    "English": {"btn": "Get Recommendations", "msg": "Top Movies", "warn": "No results"},
-    "Arabic": {"btn": "احصل على التوصيات", "msg": "أفضل الأفلام", "warn": "لا توجد نتائج"},
-    "French": {"btn": "Recommander", "msg": "Meilleurs films", "warn": "Aucun résultat"}
-}
-
 # =========================
 # LOAD DATA
 # =========================
 @st.cache_data
 def load_data():
 
-    movies = pd.read_csv("movies.csv")
+    movies = pd.read_csv("clean_content.csv")
     ratings = pd.read_csv("ratings.csv")
 
-    movies.columns = movies.columns.str.strip()
-    ratings.columns = ratings.columns.str.strip()
+    # fix column names safely
+    ratings.columns = [c.lower() for c in ratings.columns]
 
-    data = ratings.merge(movies, on="movieId")
+    # EXPECTED: userId, movieId, rating
+    # merge titles if needed
+    if "title" not in ratings.columns:
+        ratings = ratings.merge(movies[["movieId", "title"]], on="movieId", how="left")
 
+    # fill missing
     movies["genres"] = movies["genres"].fillna("")
 
+    # CONTENT BASED MODEL
     tfidf = TfidfVectorizer(stop_words="english")
     tfidf_matrix = tfidf.fit_transform(movies["genres"])
-
     sim = cosine_similarity(tfidf_matrix)
 
-    sim_df = pd.DataFrame(
-        sim,
-        index=movies["title"],
-        columns=movies["title"]
+    sim_df = pd.DataFrame(sim, index=movies["title"], columns=movies["title"])
+
+    # =========================
+    # WEIGHTED RATING (NO BIAS)
+    # =========================
+    C = ratings["rating"].mean()
+    m = ratings.groupby("movieId").size().quantile(0.60)
+
+    movie_stats = ratings.groupby("movieId").agg(
+        v=("rating", "count"),
+        R=("rating", "mean")
+    ).reset_index()
+
+    movie_stats["weighted_rating"] = (
+        (movie_stats["v"] / (movie_stats["v"] + m)) * movie_stats["R"] +
+        (m / (movie_stats["v"] + m)) * C
     )
 
-    return movies, data, sim_df
+    movies = movies.merge(movie_stats, on="movieId", how="left")
+    movies["weighted_rating"] = movies["weighted_rating"].fillna(C)
+
+    return movies, sim_df
 
 
-movies, ratings, sim_df = load_data()
+movies, sim_df = load_data()
 
-movie_list = sorted(movies["title"].dropna().unique())
+movie_list = movies["title"].dropna().unique()
 
 # =========================
 # USER INPUT
 # =========================
-st.header("🎯 Rate Movies")
+st.subheader("Rate 3 Movies")
 
 m1 = st.selectbox("Movie 1", movie_list)
-r1 = st.slider("Rating 1", 1.0, 5.0, 4.0)
+r1 = st.slider("Rating 1", 1.0, 5.0, 3.5)
 
 m2 = st.selectbox("Movie 2", movie_list, index=1)
-r2 = st.slider("Rating 2", 1.0, 5.0, 4.0)
+r2 = st.slider("Rating 2", 1.0, 5.0, 3.5)
 
 m3 = st.selectbox("Movie 3", movie_list, index=2)
-r3 = st.slider("Rating 3", 1.0, 5.0, 4.0)
+r3 = st.slider("Rating 3", 1.0, 5.0, 3.5)
 
-user_input = [(m1, r1), (m2, r2), (m3, r3)]
+user_ratings = [(m1, r1), (m2, r2), (m3, r3)]
 
 # =========================
-# RECOMMENDER
+# HYBRID RECOMMENDER
 # =========================
-def recommend(user_input):
+def recommend(user_ratings):
 
-    watched = [m for m, _ in user_input]
+    watched = [m for m, _ in user_ratings]
 
-    # CONTENT SCORE
-    content_scores = {}
+    scores = {}
 
-    for movie in watched:
+    for movie, rating in user_ratings:
+
         if movie not in sim_df.columns:
             continue
 
-        for title, score in sim_df[movie].items():
+        for title, sim_score in sim_df[movie].items():
+
             if title in watched:
                 continue
-            content_scores[title] = content_scores.get(title, 0) + score
 
-    cb = pd.DataFrame(content_scores.items(), columns=["title", "cb_score"])
+            # HYBRID SCORE
+            weighted = movies[movies["title"] == title]["weighted_rating"].values
+            weighted = weighted[0] if len(weighted) > 0 else 3.0
 
-    if not cb.empty:
-        cb["cb_score"] = cb["cb_score"] / cb["cb_score"].max()
+            score = (0.7 * sim_score * rating) + (0.3 * weighted)
 
-    # POPULARITY (simple CF proxy)
-    pop = ratings.groupby("title")["rating"].mean().reset_index()
-    pop.columns = ["title", "popularity"]
-    pop["popularity"] = pop["popularity"] / 5.0
+            scores[title] = scores.get(title, 0) + score
 
-    pop = pop[~pop["title"].isin(watched)]
+    result = pd.DataFrame(scores.items(), columns=["title", "score"])
+    result = result.sort_values("score", ascending=False).head(10)
 
-    # HYBRID
-    hybrid = pd.merge(cb, pop, on="title", how="inner")
+    result = result.merge(movies[["title", "genres", "weighted_rating"]], on="title")
 
-    if hybrid.empty:
-        return pd.DataFrame()
-
-    hybrid["final_score"] = 0.6 * hybrid["cb_score"] + 0.4 * hybrid["popularity"]
-
-    hybrid = hybrid.sort_values("final_score", ascending=False).head(10)
-
-    return hybrid.merge(movies[["title", "genres"]], on="title")
+    return result
 
 
 # =========================
-# OUTPUT
+# UI OUTPUT (CARDS)
 # =========================
-st.header("🎬 Recommendations")
+st.subheader("🎯 Recommendations")
 
-show_table = st.checkbox("Show table view")
+if st.button("Get Recommendations"):
 
-if st.button(TEXT[language]["btn"]):
-
-    recs = recommend(user_input)
+    recs = recommend(user_ratings)
 
     if recs.empty:
-        st.warning(TEXT[language]["warn"])
+        st.warning("Not enough data to generate recommendations.")
     else:
-        st.success(TEXT[language]["msg"])
-
         for _, row in recs.iterrows():
 
-            stars = "⭐" * int(round(row["popularity"] * 5))
-
             st.markdown(f"""
-            ### 🎬 {row['title']}
-            **Genres:** {row['genres']}  
-            **Score:** {round(row['final_score'], 3)}  
-            **Popularity:** {stars}
-            ---
-            """)
-
-        if show_table:
-            st.dataframe(recs)
+            <div style="
+                background-color:#f5f7ff;
+                padding:15px;
+                border-radius:12px;
+                margin-bottom:10px;
+                border:1px solid #ddd;
+            ">
+                <h4>🎬 {row['title']}</h4>
+                <p><b>Genres:</b> {row['genres']}</p>
+                <p><b>Score:</b> {round(row['score'], 3)}</p>
+                <p><b>Popularity Score:</b> ⭐ {round(row['weighted_rating'], 2)}</p>
+            </div>
+            """, unsafe_allow_html=True)
